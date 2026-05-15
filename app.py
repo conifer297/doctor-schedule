@@ -13,7 +13,7 @@ def get_pastel_color(name):
     random.seed(sum(ord(c) for c in name))
     return f"hsl({random.randint(0, 360)}, 85%, 90%)"
 
-# --- SESSION STATE INITIALIZATION ---
+# --- SESSION STATE ---
 if 'doctors' not in st.session_state:
     st.session_state.doctors = [
         {"id": 1, "name": "หมอเอ", "start_date": datetime(2025, 6, 1)},
@@ -28,42 +28,31 @@ if 'holidays' not in st.session_state:
         datetime(2026, 1, 1): "วันขึ้นปีใหม่"
     }
 
-# --- SIDEBAR: FORMS FOR IPAD STABILITY ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("👨‍⚕️ จัดการรายชื่อแพทย์")
-    # ใช้ Form เพื่อป้องกัน Error ตอนพิมพ์บน iPad
     with st.form("doctor_form", clear_on_submit=True):
         n_name = st.text_input("ชื่อแพทย์")
         n_start = st.date_input("วันที่เริ่มงาน", datetime(2025, 6, 1))
-        submit_doc = st.form_submit_button("➕ เพิ่มแพทย์")
-        
-        if submit_doc:
+        if st.form_submit_button("➕ เพิ่มแพทย์"):
             if n_name:
-                new_doc = {
+                st.session_state.doctors.append({
                     "id": len(st.session_state.doctors) + 1,
                     "name": n_name,
                     "start_date": datetime.combine(n_start, datetime.min.time())
-                }
-                st.session_state.doctors.append(new_doc)
-                st.success(f"เพิ่ม {n_name} แล้ว")
+                })
                 st.rerun()
-            else:
-                st.error("กรุณาใส่ชื่อ")
 
     st.divider()
     st.header("📅 จัดการวันหยุด")
     with st.form("holiday_form", clear_on_submit=True):
         h_date = st.date_input("เลือกวันที่หยุด")
         h_name = st.text_input("ชื่อวันหยุด")
-        submit_h = st.form_submit_button("💾 บันทึกวันหยุด")
-        
-        if submit_h:
+        if st.form_submit_button("💾 บันทึกวันหยุด"):
             if h_name:
                 st.session_state.holidays[datetime.combine(h_date, datetime.min.time())] = h_name
-                st.success("บันทึกแล้ว")
                 st.rerun()
 
-    # แสดงรายการวันหยุด
     if st.session_state.holidays:
         st.write("**วันหยุดที่บันทึก:**")
         for d, name in sorted(st.session_state.holidays.items()):
@@ -75,36 +64,30 @@ with st.sidebar:
 
 # --- ALGORITHM ---
 def generate():
-    if not st.session_state.doctors:
-        return pd.DataFrame()
-        
-    start_dt, end_dt = datetime(2025, 6, 1), datetime(2026, 5, 31)
-    curr = start_dt
+    if not st.session_state.doctors: return pd.DataFrame()
+    curr, end = datetime(2025, 6, 1), datetime(2026, 5, 31)
     data = []
     workload = {d['id']: {'wd': 0, 'we': 0} for d in st.session_state.doctors}
     
-    while curr <= end_dt:
+    while curr <= end:
         h_text = st.session_state.holidays.get(curr, "")
         is_free = (curr.weekday() >= 5) or (h_text != "")
-        
-        # เลือกเฉพาะแพทย์ที่เริ่มงานแล้ว
         available = [d for d in st.session_state.doctors if d['start_date'] <= curr]
         
-        if len(available) < 2: # ป้องกัน Error กรณีแพทย์ไม่พอ
+        if len(available) < 2:
             curr += timedelta(days=1)
             continue
             
         random.shuffle(available)
         assigned = []
-        
-        # จัดเวร 1 และ 2
+        # จัดเวรหลัก 2 คน
         for _ in range(2):
             available.sort(key=lambda x: workload[x['id']]['we' if is_free else 'wd'])
             sel = [d for d in available if d['id'] not in assigned][0]
             assigned.append(sel['id'])
             workload[sel['id']]['we' if is_free else 'wd'] += 1
         
-        # เวร 3 (ถปภ)
+        # เวร ถปภ
         v3_name = "-"
         if (curr.weekday() in [4,5,6] or h_text != ""):
             rem = [d for d in available if d['id'] not in assigned]
@@ -120,14 +103,13 @@ def generate():
             "เวรวอร์ด": next(d['name'] for d in st.session_state.doctors if d['id'] == assigned[1]),
             "เวรถปภ.": v3_name,
             "หมายเหตุ": h_text,
-            "is_h": is_free
+            "is_h": is_free # คอลัมน์เจ้าปัญหา ต้องเก็บไว้ก่อน
         })
         curr += timedelta(days=1)
     return pd.DataFrame(data)
 
-# --- MAIN DISPLAY ---
-st.title("🏥 ตารางเวรแพทย์ประจำปี (มิ.ย. - พ.ค.)")
-st.info(f"ขณะนี้มีแพทย์ในระบบ {len(st.session_state.doctors)} คน")
+# --- DISPLAY ---
+st.title("🏥 ระบบจัดเวรแพทย์ประจำปี (มิ.ย. - พ.ค.)")
 
 if len(st.session_state.doctors) >= 2:
     df = generate()
@@ -136,22 +118,30 @@ if len(st.session_state.doctors) >= 2:
 
         def style_df(row):
             styles = [''] * len(row)
-            if row['is_h']:
+            # เช็กจากคอลัมน์สุดท้าย (is_h)
+            if row.iloc[-1]: 
                 styles[0] = styles[1] = f'background-color: {HEADER_COLORS["HOLIDAY"]}'
-            for i, col in enumerate(["เวรนอกเวลา", "เวรวอร์ด", "เวรถปภ."]):
-                name = row[col]
+            
+            # ใส่สีแพทย์ (คอลัมน์ index 2, 3, 4)
+            for i, col_idx in enumerate([2, 3, 4]):
+                name = row.iloc[col_idx]
                 if name in doc_colors:
-                    styles[df.columns.get_loc(col)] = f'background-color: {doc_colors[name]}'
+                    styles[col_idx] = f'background-color: {doc_colors[name]}'
             return styles
 
-        st.markdown(f"<style>th:nth-child(4){{background:{HEADER_COLORS['OPD']}!important;color:black}} th:nth-child(5){{background:{HEADER_COLORS['WARD']}!important;color:black}} th:nth-child(6){{background:{HEADER_COLORS['SEC']}!important;color:black}}</style>", unsafe_allow_html=True)
+        st.markdown(f"<style>th:nth-child(4){{background:{HEADER_COLORS['OPD']}!important}} th:nth-child(5){{background:{HEADER_COLORS['WARD']}!important}} th:nth-child(6){{background:{HEADER_COLORS['SEC']}!important}}</style>", unsafe_allow_html=True)
         
-        st.dataframe(df.drop(columns=['is_h']).style.apply(style_df, axis=1), height=500, use_container_width=True)
+        # --- จุดที่แก้: ใส่ Style ให้เสร็จก่อน แล้วค่อยซ่อนคอลัมน์ is_h ---
+        st.dataframe(
+            df.style.apply(style_df, axis=1)
+              .hide(axis='columns', subset=['is_h']), # ซ่อนแบบไม่ลบข้อมูล
+            height=500, 
+            use_container_width=True
+        )
 
-        # DOWNLOAD
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             df.drop(columns=['is_h']).to_excel(writer, index=False)
         st.download_button("📥 ดาวน์โหลด Excel", output.getvalue(), "schedule.xlsx", use_container_width=True)
 else:
-    st.warning("กรุณาเพิ่มแพทย์อย่างน้อย 2 คนเพื่อเริ่มจัดเวร")
+    st.warning("กรุณาเพิ่มแพทย์อย่างน้อย 2 คน")
