@@ -4,8 +4,8 @@ from datetime import datetime, timedelta
 import random
 import collections
 
-# ตั้งค่าหน้าจอและฟอนต์
-st.set_page_config(layout="wide", page_title="Doctor Fair-Balance Scheduler")
+# ตั้งค่าหน้าจอ
+st.set_page_config(layout="wide", page_title="Doctor Stable-Schedule Pro")
 
 st.markdown("""
     <style>
@@ -58,7 +58,7 @@ with st.sidebar:
     st.header("👨‍⚕️ จัดการแพทย์")
     with st.form("doc_form", clear_on_submit=True):
         n_name = st.text_input("ชื่อแพทย์")
-        n_start = st.date_input("เริ่มงานจริง (พ.ศ.)", s_dt)
+        n_start = st.date_input("เริ่มงานจริง", s_dt)
         if st.form_submit_button("เพิ่มแพทย์"):
             if n_name:
                 st.session_state.doctors.append({
@@ -91,45 +91,41 @@ with st.sidebar:
             if c2.button("🗑️", key=f"h_{d.timestamp()}"):
                 del st.session_state.all_active_holidays[d]; st.rerun()
 
-# --- Core Algorithm: Balance and Freeze ---
+# --- STABLE ALGORITHM ---
 def generate_schedule():
     all_h = st.session_state.all_active_holidays
     docs = st.session_state.doctors
     if not docs: return pd.DataFrame(), {}, {}, None
     
-    # หาวันที่แพทย์คนล่าสุดเข้ามา
+    # หาวันที่แพทย์คนล่าสุดเริ่มงาน
     latest_start_date = max([d['start'] for d in docs])
     
-    data = []
+    data, work_days = [], collections.defaultdict(list)
     stats_before = {d['name']: collections.defaultdict(int) for d in docs}
     stats_after = {d['name']: collections.defaultdict(int) for d in docs}
-    load_score = {d['name']: 0 for d in docs} # วันธรรมดา 1, วันหยุด 2
-    work_days = {d['name']: [] for d in docs}
+    load_score = {d['name']: 0 for d in docs}
 
     curr = s_dt
     last_month = -1
     
     while curr <= e_dt:
-        # แสดงหัวเดือน
         if curr.month != last_month:
-            m_name = ["", "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"][curr.month]
-            data.append({"วันที่": f"--- {m_name} {get_thai_year(curr)} ---", "is_header": True})
+            data.append({"วันที่": f"--- {['','ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'][curr.month]} {get_thai_year(curr)} ---", "is_header": True})
             last_month = curr.month
 
-        # กรองแพทย์ที่ "เริ่มงานแล้ว" ณ วันที่คำนวณ
-        available_docs = [d['name'] for d in docs if d['start'] <= curr]
+        # ล็อค Seed ด้วยวันที่ เพื่อให้สุ่มกี่ครั้งก็ได้ผลเดิมสำหรับวันนี้
+        random.seed(int(curr.timestamp()))
+
+        available_docs = sorted([d['name'] for d in docs if d['start'] <= curr])
         if not available_docs:
             curr += timedelta(days=1)
             continue
 
         h_text = all_h.get(curr, "")
         is_we = (curr.weekday() >= 5) or (h_text != "")
-        score = 2 if is_we else 1
-        suffix = "WE" if is_we else "WD"
+        score, suffix = (2, "WE") if is_we else (1, "WD")
 
-        # --- อัลกอริทึมเลือกแพทย์ ---
-        # เลือกคนที่ภาระงานสะสม (Load Score) น้อยที่สุดก่อน เพื่อชดใช้เวร
-        # หากคะแนนเท่ากัน ให้สุ่ม
+        # เลือกแพทย์: ใช้ Load Score ที่สะสมมาจากอดีต (ซึ่งถูกล็อคค่าสุ่มไว้แล้ว)
         sorted_by_load = sorted(available_docs, key=lambda x: (load_score[x], random.random()))
         
         v1 = sorted_by_load[0]
@@ -140,7 +136,7 @@ def generate_schedule():
             v3_pool = [d for d in available_docs if d not in [v1, v2]]
             if v3_pool: v3 = random.choice(v3_pool)
 
-        # บันทึกสถิติ
+        # บันทึก
         target_stats = stats_after if curr >= latest_start_date else stats_before
         target_stats[v1][f"OPD_{suffix}"] += 1
         target_stats[v2][f"WARD_{suffix}"] += 1
@@ -148,7 +144,6 @@ def generate_schedule():
         load_score[v2] += score
         work_days[v1].append(curr)
         work_days[v2].append(curr)
-        
         if v3 != "-":
             target_stats[v3][f"SEC_{suffix}"] += 1
             load_score[v3] += score
@@ -161,7 +156,7 @@ def generate_schedule():
         })
         curr += timedelta(days=1)
 
-    # คำนวณวันหยุดยาว
+    # คำนวณวันหยุดต่อเนื่อง
     off_stats = {}
     for d in docs:
         n = d['name']
@@ -179,43 +174,28 @@ def generate_schedule():
 
     return pd.DataFrame(data), stats_before, stats_after, latest_start_date, off_stats
 
-# --- Display ---
-st.title(f"🏥 ระบบจัดเวรชดเชยและล็อคประวัติ พ.ศ. {selected_year}")
+# --- UI ---
+st.title(f"🏥 ตารางเวรแพทย์ (ล็อคประวัติศาสตร์)")
 
 if st.session_state.doctors:
     df, s_before, s_after, l_start, off_stats = generate_schedule()
 
-    # ตารางหลัก
     def style_row(row):
         if row.get('is_header'): return ['background-color: #B2EBF2; color: black; font-weight: bold; border: 1px solid black;'] * len(row)
-        bg = '#FFCDD2' if row.get('is_h') else 'white'
-        return [f'background-color: {bg}; border: 1px solid black; color: black; font-weight: bold;'] * len(row)
+        return [f"background-color: {'#FFCDD2' if row.get('is_h') else 'white'}; color: black; border: 1px solid black; font-weight: bold;"] * len(row)
 
     st.dataframe(df.style.apply(style_row, axis=1).hide(axis='columns', subset=['is_h', 'is_header']), height=600, use_container_width=True)
 
-    # ตารางสรุป 1: ก่อนแพทย์คนล่าสุดมา
     st.divider()
-    st.header(f"📊 1. สรุปภาระงานก่อน {format_thai_date(l_start)}")
-    st.caption("ตารางนี้คือ 'ประวัติศาสตร์' ที่ล็อคไว้เพื่อใช้คำนวณการชดใช้เวร")
-    df_b = pd.DataFrame.from_dict(s_before, orient='index').fillna(0).astype(int)
-    if not df_b.empty:
-        st.table(df_b.rename(columns={'OPD_WD':'โอพีดี(ธรรมดา)','OPD_WE':'โอพีดี(หยุด)','WARD_WD':'วอร์ด(ธรรมดา)','WARD_WE':'วอร์ด(หยุด)','SEC_WD':'ถปภ.(ธรรมดา)','SEC_WE':'ถปภ.(หยุด)'}))
+    c1, c2 = st.columns(2)
+    with c1:
+        st.header(f"📊 1. ก่อน {format_thai_date(l_start)}")
+        st.table(pd.DataFrame.from_dict(s_before, orient='index').fillna(0).astype(int))
+    with c2:
+        st.header(f"📊 2. ตั้งแต่ {format_thai_date(l_start)}")
+        st.table(pd.DataFrame.from_dict(s_after, orient='index').fillna(0).astype(int))
 
-    # ตารางสรุป 2: หลังแพทย์คนล่าสุดมา
-    st.header(f"📊 2. สรุปภาระงานช่วงชดใช้และปรับสมดุล (ตั้งแต่ {format_thai_date(l_start)})")
-    st.caption("แพทย์ที่มีเวรน้อยจากช่วงแรก จะถูกดึงมาขึ้นเวรถี่ขึ้นในช่วงนี้จนกว่าคะแนนจะสมดุล")
-    df_a = pd.DataFrame.from_dict(s_after, orient='index').fillna(0).astype(int)
-    if not df_a.empty:
-        st.table(df_a.rename(columns={'OPD_WD':'โอพีดี(ธรรมดา)','OPD_WE':'โอพีดี(หยุด)','WARD_WD':'วอร์ด(ธรรมดา)','WARD_WE':'วอร์ด(หยุด)','SEC_WD':'ถปภ.(ธรรมดา)','SEC_WE':'ถปภ.(หยุด)'}))
-
-    # ตารางวันหยุดยาว
-    st.header("🏖️ สรุปวันหยุดยาวต่อเนื่อง (รวมทั้งปี)")
-    off_rows = []
-    for n, o in off_stats.items():
-        row = {"ชื่อแพทย์": n}
-        for i in range(2, 6): row[f"หยุด {i} วัน"] = o.get(i, 0)
-        row["หยุด > 5 วัน"] = sum(v for k, v in o.items() if k > 5)
-        off_rows.append(row)
-    st.table(pd.DataFrame(off_rows))
+    st.header("🏖️ สรุปวันหยุดยาวต่อเนื่อง")
+    st.table(pd.DataFrame([{"ชื่อ":n, "หยุด 2 วัน":o.get(2,0), "หยุด 3 วัน":o.get(3,0), "หยุด 4 วัน":o.get(4,0), "หยุด >4 วัน":sum(v for k,v in o.items() if k>4)} for n,o in off_stats.items()]))
 else:
-    st.info("👈 เพิ่มชื่อแพทย์และวันที่เริ่มงานจริงที่แถบด้านข้าง (เช่น หมอ A-D เริ่ม 1 มิ.ย., หมอ E เริ่ม 1 ก.ย.)")
+    st.info("👈 เพิ่มชื่อแพทย์และวันที่เริ่มงานจริงที่ Sidebar")
