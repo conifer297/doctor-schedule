@@ -4,16 +4,16 @@ from datetime import datetime, timedelta
 import random
 import io
 
-# ต้องเพิ่ม xlsxwriter ใน requirements.txt ด้วยนะครับ
 st.set_page_config(layout="wide", page_title="Medical Shift Scheduler")
 
-# --- CONFIG & COLORS ---
+# --- COLORS & STYLES ---
 HEADER_COLORS = {"OPD": "#FFD700", "WARD": "#87CEFA", "SEC": "#98FB98", "HOLIDAY": "#FFEBEE"}
 
 def get_pastel_color(name):
     random.seed(sum(ord(c) for c in name))
-    return f"hsl({random.randint(0, 360)}, 80%, 90%)"
+    return f"hsl({random.randint(0, 360)}, 85%, 90%)"
 
+# --- SESSION STATE ---
 if 'doctors' not in st.session_state:
     st.session_state.doctors = [
         {"id": 1, "name": "หมอเอ", "start_date": datetime(2025, 6, 1)},
@@ -23,82 +23,106 @@ if 'doctors' not in st.session_state:
     ]
 
 if 'holidays' not in st.session_state:
-    st.session_state.holidays = {datetime(2025, 12, 5): "วันพ่อแห่งชาติ", datetime(2026, 1, 1): "วันขึ้นปีใหม่"}
-
-st.title("🏥 ระบบจัดเวรแพทย์ (Export Excel/PDF)")
+    st.session_state.holidays = {
+        datetime(2025, 12, 5): "วันพ่อแห่งชาติ",
+        datetime(2026, 1, 1): "วันขึ้นปีใหม่"
+    }
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.header("👨‍⚕️ จัดการแพทย์")
+    st.header("👨‍⚕️ จัดการรายชื่อแพทย์")
     n_name = st.text_input("ชื่อแพทย์")
-    n_start = st.date_input("วันเริ่มงาน", datetime(2025, 6, 1))
-    if st.button("เพิ่มแพทย์"):
-        st.session_state.doctors.append({"id": len(st.session_state.doctors)+1, "name": n_name, "start_date": datetime.combine(n_start, datetime.min.time())})
-        st.rerun()
+    n_start = st.date_input("วันที่เริ่มงาน", datetime(2025, 6, 1))
+    if st.button("➕ เพิ่มแพทย์", use_container_width=True):
+        if n_name:
+            st.session_state.doctors.append({
+                "id": len(st.session_state.doctors) + 1,
+                "name": n_name,
+                "start_date": datetime.combine(n_start, datetime.min.time())
+            })
+            st.rerun()
+
+    st.divider()
+    st.header("📅 จัดการวันหยุด")
+    h_date = st.date_input("เลือกวันที่หยุด")
+    h_name = st.text_input("ชื่อวันหยุดพิเศษ")
+    if st.button("💾 บันทึกวันหยุด", use_container_width=True):
+        if h_name:
+            st.session_state.holidays[datetime.combine(h_date, datetime.min.time())] = h_name
+            st.rerun()
+    
+    # แสดงรายการวันหยุดเพื่อให้รู้ว่ามีวันไหนบ้าง (แทนจุดบนปฏิทิน)
+    if st.session_state.holidays:
+        st.write("---")
+        st.write("**รายการวันหยุดที่บันทึกแล้ว:**")
+        for d, name in sorted(st.session_state.holidays.items()):
+            col1, col2 = st.columns([3, 1])
+            col1.caption(f"{d.strftime('%d/%m/%Y')} - {name}")
+            if col2.button("🗑️", key=f"del_{d}"):
+                del st.session_state.holidays[d]
+                st.rerun()
 
 # --- LOGIC ---
 def generate():
-    df_list = []
-    curr = datetime(2025, 6, 1)
-    end = datetime(2026, 5, 31)
+    start_dt, end_dt = datetime(2025, 6, 1), datetime(2026, 5, 31)
+    curr = start_dt
+    data = []
     workload = {d['id']: {'wd': 0, 'we': 0} for d in st.session_state.doctors}
     
-    while curr <= end:
-        h_name = st.session_state.holidays.get(curr, "")
-        is_we = curr.weekday() >= 5
-        is_h = h_name != ""
-        is_free = is_we or is_h
+    while curr <= end_dt:
+        h_text = st.session_state.holidays.get(curr, "")
+        is_free = (curr.weekday() >= 5) or (h_text != "")
+        available = [d for d in st.session_state.doctors if d['start_date'] <= curr]
+        random.shuffle(available)
         
-        docs = [d for d in st.session_state.doctors if d['start_date'] <= curr]
-        random.shuffle(docs)
+        assigned = []
+        # เวร 1 & 2
+        for _ in range(2):
+            available.sort(key=lambda x: workload[x['id']]['we' if is_free else 'wd'])
+            sel = [d for d in available if d['id'] not in assigned][0]
+            assigned.append(sel['id'])
+            workload[sel['id']]['we' if is_free else 'wd'] += 1
         
-        # จัดเวร
-        docs.sort(key=lambda x: workload[x['id']]['we' if is_free else 'wd'])
-        v1 = docs[0]
-        workload[v1['id']]['we' if is_free else 'wd'] += 1
-        
-        v2 = [d for d in docs if d['id'] != v1['id']][0]
-        workload[v2['id']]['we' if is_free else 'wd'] += 1
-        
+        # เวร 3 (ถปภ)
         v3_name = "-"
-        if curr.weekday() in [4,5,6] or is_h:
-            v3 = [d for d in docs if d['id'] not in [v1['id'], v2['id']]][0]
-            v3_name = v3['name']
-            workload[v3['id']]['we' if is_free else 'wd'] += 1
-            
-        df_list.append({"วันที่": curr.strftime("%d/%m/%Y"), "วัน": ["จ","อ","พ","พฤ","ศ","ส","อา"][curr.weekday()], "เวรนอกเวลา": v1['name'], "เวรวอร์ด": v2['name'], "เวรถปภ.": v3_name, "หมายเหตุ": h_name, "is_h": is_free})
+        if curr.weekday() in [4,5,6] or h_text != "":
+            rem = [d for d in available if d['id'] not in assigned]
+            if rem:
+                v3 = rem[0]
+                v3_name = v3['name']
+                workload[v3['id']]['we' if is_free else 'wd'] += 1
+
+        data.append({
+            "วันที่": curr.strftime("%d/%m/%Y"),
+            "วัน": ["จันทร์","อังคาร","พุธ","พฤหัสบดี","ศุกร์","เสาร์","อาทิตย์"][curr.weekday()],
+            "เวรนอกเวลา": next(d['name'] for d in st.session_state.doctors if d['id'] == assigned[0]),
+            "เวรวอร์ด": next(d['name'] for d in st.session_state.doctors if d['id'] == assigned[1]),
+            "เวรถปภ.": v3_name,
+            "หมายเหตุ": h_text,
+            "is_h": is_free
+        })
         curr += timedelta(days=1)
-    return pd.DataFrame(df_list)
+    return pd.DataFrame(data)
 
-if st.button("🚀 ประมวลผลและเตรียมไฟล์"):
-    df = generate()
-    colors = {d['name']: get_pastel_color(d['name']) for d in st.session_state.doctors}
+# --- DISPLAY ---
+st.title("🏥 ตารางเวรแพทย์ประจำปี")
+df = generate()
+doc_colors = {d['name']: get_pastel_color(d['name']) for d in st.session_state.doctors}
 
-    # 1. แสดงบนเว็บ
-    def s_table(row):
-        styles = ['background-color: #FFEBEE' if row['is_h'] else ''] * len(row)
-        for i, col in enumerate(["เวรนอกเวลา", "เวรวอร์ด", "เวรถปภ."]):
-            if row[col] in colors: styles[df.columns.get_loc(col)] = f"background-color: {colors[row[col]]}"
-        return styles
+def style_df(row):
+    styles = [''] * len(row)
+    if row['is_h']:
+        styles[0] = styles[1] = f'background-color: {HEADER_COLORS["HOLIDAY"]}'
+    for i, col in enumerate(["เวรนอกเวลา", "เวรวอร์ด", "เวรถปภ."]):
+        if row[col] in doc_colors: styles[df.columns.get_loc(col)] = f'background-color: {doc_colors[row[col]]}'
+    return styles
 
-    st.subheader("ตารางเวร")
-    st.dataframe(df.drop(columns=['is_h']).style.apply(s_table, axis=1), height=500, use_container_width=True)
+st.markdown(f"<style>th:nth-child(4){{background:{HEADER_COLORS['OPD']}!important;color:black}} th:nth-child(5){{background:{HEADER_COLORS['WARD']}!important;color:black}} th:nth-child(6){{background:{HEADER_COLORS['SEC']}!important;color:black}}</style>", unsafe_allow_html=True)
 
-    # 2. ปุ่ม Export Excel (แบบมีสี)
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.drop(columns=['is_h']).to_excel(writer, index=False, sheet_name='Sheet1')
-        workbook = writer.book
-        worksheet = writer.sheets['Sheet1']
-        # ใส่สีหัวตารางใน Excel
-        f1 = workbook.add_format({'bg_color': HEADER_COLORS['OPD'], 'border': 1})
-        f2 = workbook.add_format({'bg_color': HEADER_COLORS['WARD'], 'border': 1})
-        f3 = workbook.add_format({'bg_color': HEADER_COLORS['SEC'], 'border': 1})
-        worksheet.write('C1', 'เวรนอกเวลา', f1)
-        worksheet.write('D1', 'เวรวอร์ด', f2)
-        worksheet.write('E1', 'เวรถปภ.', f3)
+st.dataframe(df.drop(columns=['is_h']).style.apply(style_df, axis=1), height=500, use_container_width=True)
 
-    st.download_button("🟢 ดาวน์โหลด Excel (มีสีหัวตาราง)", output.getvalue(), "schedule.xlsx")
-
-    # 3. คำแนะนำสำหรับ PDF บน iPad
-    st.info("💡 **วิธีบันทึกเป็น PDF ใน iPad:** ให้คุณกดปุ่มแชร์ของ Safari (รูปสี่เหลี่ยมลูกศรชี้ขึ้น) > เลือก 'พิมพ์' (Print) > แล้วใช้สองนิ้วกางออกที่รูปตัวอย่างเพื่อบันทึกเป็น PDF ครับ")
+# EXCEL EXPORT
+output = io.BytesIO()
+with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+    df.drop(columns=['is_h']).to_excel(writer, index=False, sheet_name='Sheet1')
+st.download_button("📥 ดาวน์โหลด Excel", output.getvalue(), "schedule.xlsx", use_container_width=True)
