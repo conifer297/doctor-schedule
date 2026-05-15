@@ -18,7 +18,7 @@ st.markdown("""
     th { border: 1px solid #000 !important; text-align: center !important; background-color: #f0f2f6; color: black !important; font-weight: bold; }
     td { border: 1px solid #000 !important; text-align: center !important; }
     
-    /* ปรับขนาดฟอนต์ให้ใหญ่ขึ้นเพื่อให้อ่านง่ายแบบ Sarabun */
+    /* ปรับขนาดฟอนต์ให้ใหญ่ขึ้นเพื่อให้ระบายสีและอ่านง่ายขึ้น */
     .stDataFrame { font-size: 1.1rem; }
     </style>
 """, unsafe_allow_html=True)
@@ -84,7 +84,7 @@ with st.sidebar:
                 st.session_state.custom_holidays[datetime.combine(h_date, datetime.min.time())] = h_name
                 st.rerun()
 
-    # รายการวันหยุดที่ลงไว้แล้ว (กลับมาแล้ว)
+    # รายการวันหยุดที่ลงไว้แล้ว
     if st.session_state.custom_holidays:
         st.subheader("รายการที่บันทึก:")
         for d, name in sorted(st.session_state.custom_holidays.items()):
@@ -106,7 +106,7 @@ def generate():
     data = []
     stats = {n: {"wd": 0, "we": 0} for n in docs}
     
-    # ลอจิก Fixed Rotation สำหรับวันธรรมดา (ตามข้อ 7)
+    # ลอจิก Fixed Rotation สำหรับวันธรรมดา
     wd_order = []
     temp = s_dt
     idx = 0
@@ -132,16 +132,22 @@ def generate():
         v1 = wd_order[wd_idx] if not is_h else random.choice(docs)
         if not is_h: wd_idx += 1
         
-        v2 = random.choice([d for d in docs if d != v1])
+        # เลือกเวรวอร์ด (ต้องไม่ซ้ำกับ v1)
+        v2_pool = [d for d in docs if d != v1]
+        v2 = random.choice(v2_pool) if v2_pool else v1
+        
+        # เลือกเวรถปภ. ( v3 ) -> ป้องกันข้อผิดพลาดกรณีมีแพทย์น้อยกว่า 3 คน
         v3 = "-"
         if is_h or curr.weekday() == 4: # วันหยุดหรือวันศุกร์
-            v3 = random.choice([d for d in docs if d not in [v1, v2]])
+            v3_pool = [d for d in docs if d not in [v1, v2]]
+            if v3_pool:
+                v3 = random.choice(v3_pool)
         
         # เก็บสถิติ
         day_type = "we" if is_h else "wd"
-        stats[v1][day_type] += 1
-        stats[v2][day_type] += 1
-        if v3 != "-": stats[v3][day_type] += 1
+        if v1 in stats: stats[v1][day_type] += 1
+        if v2 in stats: stats[v2][day_type] += 1
+        if v3 in stats: stats[v3][day_type] += 1
 
         data.append({
             "วันที่": format_thai_date(curr),
@@ -161,14 +167,14 @@ if len(st.session_state.doctors) >= 2:
     def style_table(row):
         if row.get('is_header'): return ['background-color: #B2EBF2; font-weight: bold; border: 1px solid black;'] * len(row)
         bg = '#FFCDD2' if row.get('is_h') else 'white'
-        return [f'background-color: {bg}; border: 1px solid black; color: black;'] * len(row)
+        return [f'background-color: {bg}; border: 1px solid black; color: black; font-weight: bold;'] * len(row)
 
     st.dataframe(
         df.style.apply(style_table, axis=1).hide(axis='columns', subset=['is_h', 'is_header']),
         height=700, use_container_width=True
     )
 
-    # --- สรุปจำนวนเวร (กลับมาแล้ว) ---
+    # --- สรุปจำนวนเวร ---
     st.divider()
     st.subheader("📊 สรุปจำนวนเวรแยกประเภท")
     summary_data = []
