@@ -35,7 +35,9 @@ def get_fixed_holidays(year_thai):
 
 # --- INITIALIZATION ---
 if 'doctors' not in st.session_state: st.session_state.doctors = []
-if 'custom_holidays' not in st.session_state: st.session_state.custom_holidays = {}
+# รวมวันหยุดไว้ที่เดียวเพื่อให้ลบได้ทุกอย่าง
+if 'all_active_holidays' not in st.session_state: st.session_state.all_active_holidays = {}
+if 'initialized_year' not in st.session_state: st.session_state.initialized_year = None
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -44,10 +46,24 @@ with st.sidebar:
     s_dt = datetime(selected_year - 543, 6, 1)
     e_dt = datetime(selected_year - 542, 5, 31)
 
+    # โหลดวันหยุดราชการลงใน session state เมื่อเริ่มครั้งแรกหรือเปลี่ยนปี
+    if st.session_state.initialized_year != selected_year:
+        hols = get_fixed_holidays(selected_year)
+        hols.update(get_fixed_holidays(selected_year + 1))
+        # กรองเฉพาะช่วงเดือน มิ.ย. ถึง พ.ค. ปีถัดไป
+        st.session_state.all_active_holidays = {d: n for d, n in hols.items() if s_dt <= d <= e_dt}
+        st.session_state.initialized_year = selected_year
+
+    if st.button("🗑️ ล้างข้อมูลใหม่ทั้งหมด", use_container_width=True):
+        st.session_state.doctors = []
+        st.session_state.all_active_holidays = {}
+        st.session_state.initialized_year = None
+        st.rerun()
+
     st.divider()
     st.header("👨‍⚕️ จัดการแพทย์")
     with st.form("doc_form", clear_on_submit=True):
-        n_name = st.text_input("ชื่อแพทย์ (เช่น A, B)")
+        n_name = st.text_input("ชื่อแพทย์")
         n_start = st.date_input("วันที่เริ่มงานจริง", s_dt)
         if st.form_submit_button("➕ เพิ่มแพทย์"):
             if n_name:
@@ -65,37 +81,31 @@ with st.sidebar:
             st.session_state.doctors.pop(i); st.rerun()
 
     st.divider()
-    st.header("📅 วันหยุดเพิ่มเติม")
+    st.header("📅 จัดการวันหยุด")
+    st.caption("สามารถลบวันหยุดที่ไม่ต้องการ หรือเพิ่มใหม่ได้ที่นี่")
     with st.form("h_form", clear_on_submit=True):
-        h_date = st.date_input("วันที่หยุด", s_dt)
+        h_date = st.date_input("วันที่", s_dt)
         h_name = st.text_input("ชื่อวันหยุด")
-        if st.form_submit_button("💾 บันทึก"):
+        if st.form_submit_button("💾 เพิ่มวันหยุด"):
             if h_name:
-                st.session_state.custom_holidays[datetime.combine(h_date, datetime.min.time())] = h_name
+                st.session_state.all_active_holidays[datetime.combine(h_date, datetime.min.time())] = h_name
                 st.rerun()
 
-    # --- ปุ่มลบวันหยุดเพิ่มเติม (เอากลับคืนมาให้แล้วครับ) ---
-    if st.session_state.custom_holidays:
-        st.subheader("🗑️ ลบวันหยุดที่เพิ่มเอง")
-        for d, name in sorted(st.session_state.custom_holidays.items()):
+    # --- ส่วนที่นายต้องการ: ลบได้ทุกวันหยุดที่ขวางหน้า ---
+    if st.session_state.all_active_holidays:
+        st.subheader("🗑️ รายการวันหยุด (กดลบได้)")
+        # เรียงวันที่ก่อนแสดง
+        sorted_hols = sorted(st.session_state.all_active_holidays.items())
+        for d, name in sorted_hols:
             c1, c2 = st.columns([4,1])
             c1.caption(f"{format_thai_date(d)} - {name}")
             if c2.button("🗑️", key=f"h_{d.timestamp()}"):
-                del st.session_state.custom_holidays[d]
+                del st.session_state.all_active_holidays[d]
                 st.rerun()
 
-    st.divider()
-    st.subheader("📋 รายการวันหยุดทั้งหมดในระบบ")
-    all_h_list = get_fixed_holidays(selected_year)
-    all_h_list.update(get_fixed_holidays(selected_year+1))
-    all_h_list.update(st.session_state.custom_holidays)
-    for d_h, name_h in sorted(all_h_list.items()):
-        if s_dt <= d_h <= e_dt:
-            st.caption(f"{format_thai_date(d_h)} - {name_h}")
-
-# --- FAIR ALGORITHM (DYNAMIC STAFFING) ---
+# --- FAIR ALGORITHM ---
 def generate_schedule():
-    all_h = all_h_list
+    all_h = st.session_state.all_active_holidays
     docs = st.session_state.doctors
     if not docs: return pd.DataFrame(), {}, {}
     
@@ -170,7 +180,7 @@ def generate_schedule():
     return pd.DataFrame(data), stats, off_stats
 
 # --- DISPLAY ---
-st.title(f"🏥 ระบบจัดเวรแพทย์อัจฉริยะ พ.ศ. {selected_year}")
+st.title(f"🏥 ตารางเวรแพทย์ พ.ศ. {selected_year}")
 
 if st.session_state.doctors:
     df, stats_full, off_stats = generate_schedule()
@@ -182,9 +192,9 @@ if st.session_state.doctors:
 
     st.dataframe(df.style.apply(style_table, axis=1).hide(axis='columns', subset=['is_h', 'is_header']), height=600, use_container_width=True)
 
-    # --- ตารางสรุปละเอียด ---
+    # สรุปภาระงาน
     st.divider()
-    st.header("📊 ตารางสรุปภาระงานละเอียด (แยกประเภทเวร)")
+    st.header("📊 ตารางสรุปภาระงานละเอียด")
     summary_df = pd.DataFrame.from_dict(stats_full, orient='index').reset_index().rename(columns={'index': 'ชื่อแพทย์'})
     cols = ['ชื่อแพทย์', 'OPD_WD', 'OPD_WE', 'WARD_WD', 'WARD_WE', 'SEC_WD', 'SEC_WE']
     st.table(summary_df[cols].rename(columns={
@@ -193,8 +203,8 @@ if st.session_state.doctors:
         'SEC_WD': 'ถปภ.(ธรรมดา)', 'SEC_WE': 'ถปภ.(หยุด)'
     }))
 
-    # --- ตารางวิเคราะห์วันหยุดยาว ---
-    st.subheader("🏖️ ตารางสรุปวันหยุดยาวต่อเนื่อง (จำนวนครั้ง)")
+    # สรุปวันหยุดยาว
+    st.subheader("🏖️ ตารางสรุปวันหยุดยาวต่อเนื่อง (ครั้ง)")
     off_rows = []
     for n, o in off_stats.items():
         row = {"ชื่อแพทย์": n}
