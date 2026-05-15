@@ -2,12 +2,11 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import random
-import collections
 import json
 import os
 
 # ตั้งค่าหน้าจอและสไตล์
-st.set_page_config(layout="wide", page_title="Medical Fair-Scheduler Pro")
+st.set_page_config(layout="wide", page_title="Medical Fair-Scheduler True Holiday Block")
 
 st.markdown("""
     <style>
@@ -19,26 +18,23 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-DB_FILE = "pure_scheduler_db.json"
+DB_FILE = "true_holiday_scheduler_db.json"
 
-# --- SYSTEM DATABASE FUNCTIONS (ระบบบันทึกข้อมูลถาวร) ---
+# --- SYSTEM DATABASE FUNCTIONS ---
 def load_from_db():
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                
             doctors = []
             for d in data.get("doctors", []):
                 doctors.append({
                     "id": d["id"], "name": d["name"],
                     "start": datetime.strptime(d["start"], "%Y-%m-%d")
                 })
-                
             custom_holidays = {}
             for k, v in data.get("custom_holidays", {}).items():
                 custom_holidays[datetime.strptime(k, "%Y-%m-%d")] = v
-                
             return doctors, custom_holidays, data.get("selected_year", 2568)
         except:
             return [], {}, 2568
@@ -164,6 +160,7 @@ def generate_schedule():
         
     stats_before = {n: create_stat_template() for n in doc_names}
     stats_after = {n: create_stat_template() for n in doc_names}
+    
     load_score = {n: 0 for n in doc_names}
     
     data = []
@@ -176,7 +173,6 @@ def generate_schedule():
             data.append({"วันที่": f"--- {m_name} {get_thai_year(curr)} ---", "is_header": True})
             last_month = curr.month
 
-        # ล็อค Seed ด้วยวันเวลา เพื่อให้ปิดแอปแล้วกลับมาสุ่มใหม่ยังได้ผลลัพธ์เดิมคงเดิม 100%
         random.seed(int(curr.timestamp()))
 
         available_docs = sorted([d['name'] for d in docs if d['start'] <= curr])
@@ -189,7 +185,12 @@ def generate_schedule():
         score = 2 if is_we else 1
         day_type = "หยุด" if is_we else "ธรรมดา"
 
-        sorted_by_load = sorted(available_docs, key=lambda x: (load_score[x], random.random()))
+        def get_avg_load(name):
+            doc_info = next(d for d in docs if d['name'] == name)
+            days_worked = (curr - doc_info['start']).days + 1
+            return load_score[name] / days_worked
+
+        sorted_by_load = sorted(available_docs, key=lambda x: (get_avg_load(x), random.random()))
         v1 = sorted_by_load[0]
         v2 = sorted_by_load[1] if len(available_docs) > 1 else v1
         
@@ -198,7 +199,7 @@ def generate_schedule():
             v3_pool = [d for d in available_docs if d not in [v1, v2]]
             if v3_pool: v3 = random.choice(v3_pool)
 
-        # บันทึกยอดเวรแยกช่วงก่อน-หลังคนล่าสุดมาแทรก
+        # บันทึกสถิติแยกประเภทเวร
         target_stats = stats_after if curr >= latest_start_date else stats_before
         target_stats[v1][f"โอพีดี({day_type})"] += 1
         target_stats[v2][f"วอร์ด({day_type})"] += 1
@@ -215,33 +216,47 @@ def generate_schedule():
         })
         curr += timedelta(days=1)
 
-    # ค้นหากลุ่มเทศกาลวันหยุดราชการต่อเนื่องตั้งแต่ 2 วันขึ้นไป (Long Weekend)
+    # --- LOGIC ค้นหากลุ่มก้อนวันหยุดต่อเนื่อง (เสาร์-อาทิตย์ หรือวันหยุดนักขัตฤกษ์ที่ติดกัน) ---
     holiday_blocks, current_block = [], []
     curr = s_dt
     while curr <= e_dt:
         is_h = (curr.weekday() >= 5) or (curr in all_h)
-        if is_h: current_block.append(curr)
+        if is_h: 
+            current_block.append(curr)
         else:
-            if len(current_block) >= 2: holiday_blocks.append(current_block)
+            if len(current_block) >= 2: 
+                holiday_blocks.append(current_block)
             current_block = []
         curr += timedelta(days=1)
-    if len(current_block) >= 2: holiday_blocks.append(current_block)
+    if len(current_block) >= 2: 
+        holiday_blocks.append(current_block)
 
-    # เช็คว่าในแต่ละเทศกาลหยุดยาว แพทย์คนไหนโดนเรียกมาทำงานจริงกี่วัน
+    # ตั้งต้นเก็บสถิติ "จำนวนครั้งแยกตามก้อนความยาววันหยุดต่อเนื่อง"
     hol_stats = {n: {2:0, 3:0, 4:0, "5วันขึ้นไป":0} for n in doc_names}
     df_clean = pd.DataFrame([r for r in data if not r.get("is_header")])
     
     if not df_clean.empty:
         for block in holiday_blocks:
             length = len(block)
-            cat = length if length in [2, 3, 4] else "5วันขึ้นไป"
-            for day in block:
-                day_rows = df_clean[df_clean["raw_date"] == day]
-                if not day_rows.empty:
-                    row = day_rows.iloc[0]
-                    assigned = [row["เวรโอพีดี"], row["เวรวอร์ด"], row["เวรถปภ."]]
-                    for n in doc_names:
-                        if n in assigned: hol_stats[n][cat] += 1
+            # แยกหมวดหมู่ตามความยาวของก้อนวันหยุดต่อเนื่องจริงตามปฏิทิน
+            if length == 2: cat = 2
+            elif length == 3: cat = 3
+            elif length == 4: cat = 4
+            else: cat = "5วันขึ้นไป"
+            
+            # ตรวจสอบแพทย์ทีละคน: ในก้อนวันหยุดเทศกาลนี้ (ไม่ว่าจะยาวกี่วัน) ถ้ามีชื่อไปเอี่ยวในเวรวันใดวันหนึ่ง ถือว่าโดนสุ่มไป 1 ครั้ง
+            for n in doc_names:
+                has_duty_in_this_block = False
+                for day in block:
+                    day_rows = df_clean[df_clean["raw_date"] == day]
+                    if not day_rows.empty:
+                        row = day_rows.iloc[0]
+                        if n in [row["เวรโอพีดี"], row["เวรวอร์ด"], row["เวรถปภ."]]:
+                            has_duty_in_this_block = True
+                            break # เจอชื่อปุ๊บ หยุดสแกนวันอื่นในก้อนนี้ทันทีเพื่อไม่ให้นับซ้ำวัน
+                
+                if has_duty_in_this_block:
+                    hol_stats[n][cat] += 1 # บันทึกแต้มเป็นเข้าเวรก้อนนี้ "1 ครั้ง"
 
     return pd.DataFrame(data), stats_before, stats_after, latest_start_date, hol_stats
 
@@ -251,7 +266,6 @@ st.title(f"🏥 ตารางเวรแพทย์ พ.ศ. {st.session_sta
 if st.session_state.doctors:
     df, s_before, s_after, l_start, hol_stats = generate_schedule()
 
-    # แสดงผลตารางใหญ่ (ซ่อนคอลัมน์ระบบออกไปทั้งหมดแล้ว)
     def style_row(row):
         if row.get('is_header'): return ['background-color: #B2EBF2; color: black; font-weight: bold; border: 1px solid black;'] * len(row)
         return [f"background-color: {'#FFCDD2' if row.get('is_h') else 'white'}; color: black; border: 1px solid black; font-weight: bold;"] * len(row)
@@ -259,18 +273,15 @@ if st.session_state.doctors:
     show_cols = ["วันที่", "วัน", "เวรโอพีดี", "เวรวอร์ด", "เวรถปภ.", "หมายเหตุ"]
     st.dataframe(df.style.apply(style_row, axis=1).hide(axis='columns', subset=[c for c in df.columns if c not in show_cols]), height=500, use_container_width=True)
 
-    # ฟังก์ชันแปลงตารางสรุปภาระงานพร้อมคอลัมน์คำนวณรวมสุทธิ (ภาษาไทย)
+    # แปลงตารางสรุปภาระงาน (ไม่มีช่องยอดรวมรบกวนสายตาตามสีฟ้า)
     def build_summary_table(stats_dict):
         res_df = pd.DataFrame.from_dict(stats_dict, orient='index').fillna(0).astype(int)
         if res_df.empty: return res_df
-        res_df["รวมเวรธรรมดา"] = res_df["โอพีดี(ธรรมดา)"] + res_df["วอร์ด(ธรรมดา)"] + res_df["ถปภ.(ธรรมดา)"]
-        res_df["รวมเวรวันหยุด"] = res_df["โอพีดี(หยุด)"] + res_df["วอร์ด(หยุด)"] + res_df["ถปภ.(หยุด)"]
-        res_df["รวมเวรทั้งหมด"] = res_df["รวมเวรธรรมดา"] + res_df["รวมเวรวันหยุด"]
-        return res_df[["โอพีดี(ธรรมดา)", "วอร์ด(ธรรมดา)", "ถปภ.(ธรรมดา)", "รวมเวรธรรมดา", "โอพีดี(หยุด)", "วอร์ด(หยุด)", "ถปภ.(หยุด)", "รวมเวรวันหยุด", "รวมเวรทั้งหมด"]]
+        return res_df[["โอพีดี(ธรรมดา)", "วอร์ด(ธรรมดา)", "ถปภ.(ธรรมดา)", "โอพีดี(หยุด)", "วอร์ด(หยุด)", "ถปภ.(หยุด)"]]
 
-    # --- ตารางสรุปจำนวนเวรแยกช่วงเวลาตามที่วงไว้ ---
+    # --- ตารางสรุปจำนวนเวรรายบุคคล ---
     st.divider()
-    st.header("📊 ตารางสรุปจำนวนเวรรายบุคคล")
+    st.header("📊 ตารางสรุปจำนวนเวรรายบุคคล (แยกประเภทเวรธรรมดา/หยุด)")
     
     st.subheader(f"1. ช่วงแรก (ก่อนแพทย์คนล่าสุดเริ่มงาน : ก่อน {format_thai_date(l_start)})")
     df_b = build_summary_table(s_before)
@@ -285,20 +296,19 @@ if st.session_state.doctors:
         df_total = df_b.add(df_a, fill_value=0).astype(int)
         st.table(df_total)
 
-    # --- ตารางวิเคราะห์เทศกาลวันหยุดราชการต่อเนื่อง (แก้ไข Logic ใหม่แล้ว) ---
+    # --- ตารางวิเคราะห์เทศกาลวันหยุดราชการต่อเนื่อง (Logic แก้ไขถูกต้องตรงบรีฟ) ---
     st.divider()
-    st.header("🏖️ ตารางสรุปการทำงานช่วงวันหยุดยาวราชการ (จำนวนวันที่โดนสุ่มให้มาเข้าเวร)")
-    st.caption("ระบบนับจำนวนวันจริงที่แพทย์แต่ละคนติดเวร (เวรใดเวรหนึ่ง) ในช่วงเทศกาลวันหยุดยาวที่ติดกันตั้งแต่ 2 วันขึ้นไปตามปฏิทิน")
+    st.header("🏖️ ตารางสรุปการทำงานช่วงวันหยุดยาวราชการ (หน่วย: จำนวนครั้ง)")
+    st.caption("ระบบคำนวณตามจริง: วิ่งค้นหาก้อนวันหยุดต่อเนื่องบนปฏิทิน หากแพทย์ท่านใดติดเวรในก้อนนั้นๆ (ไม่ว่าจะโดนกี่วันก็ตามในเทศกาลนั้น) จะนับเป็นสะสมก้อนประเภทนั้น 1 ครั้ง")
     
     h_rows = []
     for name, cats in hol_stats.items():
         h_rows.append({
             "ชื่อแพทย์": name, 
-            "ช่วงหยุดยาว 2 วัน (วัน)": cats[2], 
-            "ช่วงหยุดยาว 3 วัน (วัน)": cats[3],
-            "ช่วงหยุดยาว 4 วัน (วัน)": cats[4], 
-            "ช่วงหยุดยาว 5 วันขึ้นไป (วัน)": cats["5วันขึ้นไป"],
-            "รวมวันหยุดยาวที่ต้องทำงานทั้งปี (วัน)": cats[2] + cats[3] + cats[4] + cats["5วันขึ้นไป"]
+            "วันหยุดต่อเนื่อง 2 วัน (ครั้ง)": cats[2], 
+            "วันหยุดต่อเนื่อง 3 วัน (ครั้ง)": cats[3],
+            "วันหยุดต่อเนื่อง 4 วัน (ครั้ง)": cats[4], 
+            "วันหยุดต่อเนื่อง 5 วันขึ้นไป (ครั้ง)": cats["5วันขึ้นไป"]
         })
     st.table(pd.DataFrame(h_rows).set_index("ชื่อแพทย์"))
 else:
