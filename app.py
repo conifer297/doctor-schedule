@@ -4,143 +4,166 @@ from datetime import datetime, timedelta
 import random
 import io
 
-st.set_page_config(layout="wide", page_title="Universal Medical Scheduler")
+st.set_page_config(layout="wide", page_title="Medical Scheduler Pro")
 
-# --- COLORS ---
-HEADER_COLORS = {"OPD": "#FFD700", "WARD": "#87CEFA", "SEC": "#98FB98", "HOLIDAY": "#FFEBEE"}
+# --- CUSTOM CSS FOR IPAD FULLSCREEN & CENTERING ---
+st.markdown("""
+    <style>
+    .main .block-container { padding: 1rem 1rem; max-width: 100%; }
+    [data-testid="stElementToolbar"] { display: none; }
+    .stDataFrame div[data-testid="stTable"] div { text-align: center !important; }
+    th { text-align: center !important; color: black !important; font-weight: bold !important; }
+    </style>
+""", unsafe_allow_html=True)
 
-def get_pastel_color(name):
-    random.seed(sum(ord(c) for c in name))
-    return f"hsl({random.randint(0, 360)}, 85%, 90%)"
+# --- COLORS SETTINGS ---
+HEADER_COLORS = {"OPD": "#FFD700", "WARD": "#87CEFA", "SEC": "#98FB98", "HOLIDAY_CELL": "#FF9999"}
+
+def get_distinct_color(idx):
+    # ชุดสีพาสเทลที่แยกเฉดชัดเจน (แดง, เขียว, ฟ้า, ส้ม, ม่วง, ชมพู, เหลือง)
+    palette = ["#FFB3BA", "#BAFFC9", "#BAE1FF", "#FFFFBA", "#FFDFBA", "#E0BBE4", "#D4F0F0", "#FEC8D8", "#C5E1A5", "#90CAF9"]
+    return palette[idx % len(palette)]
 
 # --- SESSION STATE ---
 if 'doctors' not in st.session_state:
-    st.session_state.doctors = []
+    st.session_state.doctors = [
+        {"id": 1, "name": "หมอเอ", "start_date": datetime(2025, 6, 1)},
+        {"id": 2, "name": "หมอบี", "start_date": datetime(2025, 6, 1)},
+        {"id": 3, "name": "หมอซี", "start_date": datetime(2025, 6, 1)},
+        {"id": 4, "name": "หมอดี", "start_date": datetime(2025, 6, 1)},
+    ]
 
+# วันหยุดราชการไทยเบื้องต้น
 if 'holidays' not in st.session_state:
-    st.session_state.holidays = {}
+    st.session_state.holidays = {
+        datetime(2025, 6, 3): "วันเฉลิมฯ พระราชินี", datetime(2025, 7, 10): "วันอาสาฬหบูชา",
+        datetime(2025, 7, 11): "วันเข้าพรรษา", datetime(2025, 7, 28): "วันเฉลิมฯ ร.10",
+        datetime(2025, 8, 12): "วันแม่แห่งชาติ", datetime(2025, 10, 13): "วันสวรรคต ร.9",
+        datetime(2025, 10, 23): "วันปิยมหาราช", datetime(2025, 12, 5): "วันพ่อแห่งชาติ",
+        datetime(2025, 12, 10): "วันรัฐธรรมนูญ", datetime(2025, 12, 31): "วันสิ้นปี",
+        datetime(2026, 1, 1): "วันขึ้นปีใหม่", datetime(2026, 3, 3): "วันมาฆบูชา",
+        datetime(2026, 4, 6): "วันจักรี", datetime(2026, 4, 13): "วันสงกรานต์",
+        datetime(2026, 4, 14): "วันสงกรานต์", datetime(2026, 4, 15): "วันสงกรานต์",
+        datetime(2026, 5, 1): "วันแรงงาน", datetime(2026, 5, 4): "วันฉัตรมงคล",
+        datetime(2026, 5, 31): "วันวิสาขบูชา"
+    }
 
-# --- SIDEBAR: SETUP ---
+# --- SIDEBAR ---
 with st.sidebar:
-    st.header("⚙️ ตั้งค่าช่วงเวลา")
-    # ให้ผู้ใช้เลือกปีเริ่มต้นเองได้ (ใช้ได้ถึงอนาคต)
-    selected_year = st.number_input("จัดเวรเริ่มปี พ.ศ. (มิ.ย.)", min_value=2567, max_value=2600, value=2568)
-    start_date = datetime(selected_year - 543, 6, 1)
-    end_date = datetime(selected_year - 542, 5, 31)
-    st.caption(f"ช่วงเวลา: {start_date.strftime('%d/%m/%Y')} ถึง {end_date.strftime('%d/%m/%Y')}")
+    st.header("⚙️ ปี พ.ศ. ที่จัดเวร")
+    selected_year = st.number_input("เริ่มต้น มิ.ย. ปี พ.ศ.", 2567, 2600, 2568)
+    s_dt = datetime(selected_year - 543, 6, 1)
+    e_dt = datetime(selected_year - 542, 5, 31)
 
     st.divider()
-    st.header("👨‍⚕️ จัดการรายชื่อแพทย์")
-    with st.form("doc_form", clear_on_submit=True):
-        n_name = st.text_input("ชื่อแพทย์")
-        n_start = st.date_input("เริ่มทำงานวันที่", start_date)
-        if st.form_submit_button("➕ เพิ่มแพทย์"):
-            if n_name:
-                st.session_state.doctors.append({
-                    "id": random.randint(1000, 9999),
-                    "name": n_name,
-                    "start_date": datetime.combine(n_start, datetime.min.time())
-                })
-                st.rerun()
-
-    if st.session_state.doctors:
-        for i, doc in enumerate(st.session_state.doctors):
-            c1, c2 = st.columns([4, 1])
-            c1.caption(f"{doc['name']} (เริ่ม {doc['start_date'].strftime('%d/%m/%y')})")
-            if c2.button("🗑️", key=f"del_doc_{doc['id']}"):
-                st.session_state.doctors.pop(i)
-                st.rerun()
-
-    st.divider()
-    st.header("📅 วันหยุดพิเศษ")
-    with st.form("h_form", clear_on_submit=True):
-        h_date = st.date_input("วันที่")
-        h_name = st.text_input("ชื่อวันหยุด")
-        if st.form_submit_button("💾 บันทึก"):
-            if h_name:
-                st.session_state.holidays[datetime.combine(h_date, datetime.min.time())] = h_name
-                st.rerun()
-
-    if st.session_state.holidays:
-        for d, name in sorted(st.session_state.holidays.items()):
-            # แสดงเฉพาะวันหยุดที่อยู่ในช่วงปีที่เลือก
-            if start_date <= d <= end_date:
-                c1, c2 = st.columns([4, 1])
-                c1.caption(f"{d.strftime('%d/%m/%y')} {name}")
-                if c2.button("🗑️", key=f"del_h_{d.timestamp()}"):
-                    del st.session_state.holidays[d]
+    st.header("👨‍⚕️ แพทย์ & วันหยุด")
+    with st.expander("➕ เพิ่มแพทย์/วันหยุด"):
+        with st.form("add_form", clear_on_submit=True):
+            type = st.radio("ประเภท", ["แพทย์", "วันหยุด"])
+            name = st.text_input("ชื่อ")
+            date = st.date_input("วันที่")
+            if st.form_submit_button("บันทึก"):
+                if name:
+                    if type == "แพทย์":
+                        st.session_state.doctors.append({"id": random.randint(100,999), "name": name, "start_date": datetime.combine(date, datetime.min.time())})
+                    else:
+                        st.session_state.holidays[datetime.combine(date, datetime.min.time())] = name
                     st.rerun()
 
-# --- LOGIC ---
-def generate(s_dt, e_dt):
-    if not st.session_state.doctors: return pd.DataFrame()
+    st.subheader("📋 ลิสต์วันหยุดปัจจุบัน")
+    for d, n in sorted(st.session_state.holidays.items()):
+        if s_dt <= d <= e_dt:
+            c1, c2 = st.columns([4, 1])
+            c1.caption(f"{d.strftime('%d/%m/%Y')} {n}")
+            if c2.button("🗑️", key=f"h_{d.timestamp()}"):
+                del st.session_state.holidays[d]
+                st.rerun()
+
+# --- ALGORITHM & LOGIC ---
+def generate_all():
     curr = s_dt
     data = []
-    workload = {d['id']: {'wd': 0, 'we': 0} for d in st.session_state.doctors}
+    # เก็บสถิติ: {doc_name: {เวรประเภท: {วันธรรมดา/วันหยุด: count}}}
+    stats = {d['name']: {"เวรนอกเวลา": [0, 0], "เวรวอร์ด": [0, 0], "เวรถปภ.": [0, 0]} for d in st.session_state.doctors}
     
     while curr <= e_dt:
         h_text = st.session_state.holidays.get(curr, "")
         is_free = (curr.weekday() >= 5) or (h_text != "")
+        type_idx = 1 if is_free else 0 # 0=Weekday, 1=Holiday
+        
         available = [d for d in st.session_state.doctors if d['start_date'] <= curr]
+        if len(available) < 2: curr += timedelta(days=1); continue
         
-        if len(available) < 2:
-            curr += timedelta(days=1); continue
-            
         random.shuffle(available)
-        assigned = []
-        # เกลี่ยภาระงาน
-        for _ in range(2):
-            available.sort(key=lambda x: workload[x['id']]['we' if is_free else 'wd'])
-            sel = [d for d in available if d['id'] not in assigned][0]
-            assigned.append(sel['id'])
-            workload[sel['id']]['we' if is_free else 'wd'] += 1
+        # จัดเวร
+        available.sort(key=lambda x: sum(stats[x['name']][k][type_idx] for k in stats[x['name']]))
         
-        v3_name = "-"
-        if (curr.weekday() in [4,5,6] or h_text != ""):
-            rem = [d for d in available if d['id'] not in assigned]
-            if rem:
-                v3 = rem[0]
-                v3_name = v3['name']
-                workload[v3['id']]['we' if is_free else 'wd'] += 1
+        v1 = available[0]['name']
+        stats[v1]["เวรนอกเวลา"][type_idx] += 1
+        
+        v2 = available[1]['name']
+        stats[v2]["เวรวอร์ด"][type_idx] += 1
+        
+        v3 = "-"
+        if curr.weekday() in [4,5,6] or h_text != "":
+            v3 = available[2]['name'] if len(available) > 2 else available[0]['name']
+            stats[v3]["เวรถปภ."][type_idx] += 1
 
         data.append({
             "วันที่": curr.strftime("%d/%m/%Y"),
             "วัน": ["จันทร์","อังคาร","พุธ","พฤหัสบดี","ศุกร์","เสาร์","อาทิตย์"][curr.weekday()],
-            "เวรนอกเวลา": next(d['name'] for d in st.session_state.doctors if d['id'] == assigned[0]),
-            "เวรวอร์ด": next(d['name'] for d in st.session_state.doctors if d['id'] == assigned[1]),
-            "เวรถปภ.": v3_name,
-            "หมายเหตุ": h_text,
-            "is_h": is_free
+            "เวรนอกเวลา": v1, "เวรวอร์ด": v2, "เวรถปภ.": v3,
+            "หมายเหตุ": h_text, "is_h": is_free
         })
         curr += timedelta(days=1)
-    return pd.DataFrame(data)
+    return pd.DataFrame(data), stats
 
 # --- DISPLAY ---
-st.title(f"🏥 ระบบจัดเวรแพทย์ปีงบประมาณ {selected_year}")
+st.title(f"🏥 ตารางเวรแพทย์ปีงบประมาณ {selected_year}")
 
 if len(st.session_state.doctors) >= 2:
-    df = generate(start_date, end_date)
-    if not df.empty:
-        doc_colors = {d['name']: get_pastel_color(d['name']) for d in st.session_state.doctors}
+    df, stats = generate_all()
+    # สร้าง Color Map ให้แพทย์
+    doc_colors = {d['name']: get_distinct_color(i) for i, d in enumerate(st.session_state.doctors)}
 
-        def style_df(row):
-            styles = ['color: black; font-weight: bold;'] * len(row)
-            if row.iloc[-1]: # highlight holiday
-                styles[0] = styles[1] = f'background-color: {HEADER_COLORS["HOLIDAY"]};'
-            for i, col_idx in enumerate([2, 3, 4]):
-                name = row.iloc[col_idx]
-                if name in doc_colors:
-                    styles[col_idx] = f'background-color: {doc_colors[name]}; color: black;'
-            return styles
-
-        st.markdown(f"<style>th{{color:black!important;font-weight:bold!important}} th:nth-child(4){{background:{HEADER_COLORS['OPD']}!important}} th:nth-child(5){{background:{HEADER_COLORS['WARD']}!important}} th:nth-child(6){{background:{HEADER_COLORS['SEC']}!important}}</style>", unsafe_allow_html=True)
+    def style_main(row):
+        # พื้นฐานตัวหนังสือสีดำ กึ่งกลาง
+        base = 'color: black; font-weight: bold; text-align: center;'
+        styles = [base] * len(row)
+        # สีช่องวันที่/วัน
+        if row.iloc[-1]: # is_h
+            styles[0] = styles[1] = f'background-color: {HEADER_COLORS["HOLIDAY_CELL"]}; {base}'
+        else:
+            styles[0] = styles[1] = f'background-color: white; {base}'
         
-        st.dataframe(df.style.apply(style_df, axis=1).hide(axis='columns', subset=['is_h']), height=600, use_container_width=True)
+        # สีแพทย์
+        for i, col_idx in enumerate([2, 3, 4]):
+            name = row.iloc[col_idx]
+            if name in doc_colors:
+                styles[col_idx] = f'background-color: {doc_colors[name]}; {base}'
+        return styles
 
-        # DOWNLOAD
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.drop(columns=['is_h']).to_excel(writer, index=False)
-        st.download_button("📥 ดาวน์โหลด Excel ตารางปีนี้", output.getvalue(), f"schedule_{selected_year}.xlsx", use_container_width=True)
+    # พ่น Header CSS
+    st.markdown(f"<style>th:nth-child(4){{background:{HEADER_COLORS['OPD']}!important}} th:nth-child(5){{background:{HEADER_COLORS['WARD']}!important}} th:nth-child(6){{background:{HEADER_COLORS['SEC']}!important}}</style>", unsafe_allow_html=True)
+    
+    st.dataframe(df.style.apply(style_main, axis=1).hide(axis='columns', subset=['is_h']), height=600, use_container_width=True)
+
+    # --- SUMMARY TABLE ---
+    st.divider()
+    st.subheader("📊 สรุปจำนวนเวรรายบุคคล (ครั้ง)")
+    summary_list = []
+    for d_name, shifts in stats.items():
+        summary_list.append({
+            "ชื่อแพทย์": d_name,
+            "นอกเวลา(ธรรมดา)": shifts["เวรนอกเวลา"][0], "นอกเวลา(หยุด)": shifts["เวรนอกเวลา"][1],
+            "วอร์ด(ธรรมดา)": shifts["เวรวอร์ด"][0], "วอร์ด(หยุด)": shifts["เวรวอร์ด"][1],
+            "ถปภ.(ธรรมดา)": shifts["เวรถปภ."][0], "ถปภ.(หยุด)": shifts["เวรถปภ."][1],
+            "รวมทั้งหมด": sum(shifts[k][0] + shifts[k][1] for k in shifts)
+        })
+    st.table(pd.DataFrame(summary_list))
+
+    # DOWNLOAD
+    csv = df.drop(columns=['is_h']).to_csv(index=False).encode('utf-8-sig')
+    st.download_button("📥 ดาวน์โหลดตาราง (CSV)", csv, "schedule.csv", "text/csv", use_container_width=True)
 else:
-    st.warning("👈 กรุณาตั้งค่า 'ปี' และ 'รายชื่อแพทย์' ที่แถบด้านข้าง")
+    st.warning("เพิ่มแพทย์อย่างน้อย 2 คน")
