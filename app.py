@@ -67,16 +67,25 @@ with st.sidebar:
     st.divider()
     st.header("📅 วันหยุดเพิ่มเติม")
     with st.form("h_form", clear_on_submit=True):
-        h_date = st.date_input("วันที่หยุด")
+        h_date = st.date_input("วันที่หยุด", s_dt)
         h_name = st.text_input("ชื่อวันหยุด")
         if st.form_submit_button("💾 บันทึก"):
             if h_name:
                 st.session_state.custom_holidays[datetime.combine(h_date, datetime.min.time())] = h_name
                 st.rerun()
 
-    # --- LIST วันหยุด (สีเขียว) กลับมาแล้ว ---
+    # --- ปุ่มลบวันหยุดเพิ่มเติม (เอากลับคืนมาให้แล้วครับ) ---
+    if st.session_state.custom_holidays:
+        st.subheader("🗑️ ลบวันหยุดที่เพิ่มเอง")
+        for d, name in sorted(st.session_state.custom_holidays.items()):
+            c1, c2 = st.columns([4,1])
+            c1.caption(f"{format_thai_date(d)} - {name}")
+            if c2.button("🗑️", key=f"h_{d.timestamp()}"):
+                del st.session_state.custom_holidays[d]
+                st.rerun()
+
     st.divider()
-    st.subheader("📋 รายการวันหยุดในระบบ")
+    st.subheader("📋 รายการวันหยุดทั้งหมดในระบบ")
     all_h_list = get_fixed_holidays(selected_year)
     all_h_list.update(get_fixed_holidays(selected_year+1))
     all_h_list.update(st.session_state.custom_holidays)
@@ -97,7 +106,7 @@ def generate_schedule():
     data = []
     curr = s_dt
     last_month = -1
-    pool_state = {} # เก็บ index คิวสำหรับแพทย์แต่ละกลุ่มความพร้อม
+    pool_state = {}
 
     while curr <= e_dt:
         if curr.month != last_month:
@@ -105,7 +114,6 @@ def generate_schedule():
             data.append({"วันที่": f"--- {m_name} {get_thai_year(curr)} ---", "is_header": True})
             last_month = curr.month
 
-        # กรองแพทย์ที่เริ่มงานแล้ว ณ วันนี้
         available_docs = sorted([d['name'] for d in docs if d['start'] <= curr])
         if not available_docs:
             curr += timedelta(days=1)
@@ -118,21 +126,17 @@ def generate_schedule():
         is_we = (curr.weekday() >= 5) or (h_text != "")
         suffix = "WE" if is_we else "WD"
 
-        # 1. เวรโอพีดี (Fixed Rotation)
         v1 = available_docs[pool_state[n_avail] % n_avail]
-        if not is_we: pool_state[n_avail] += 1 # รันคิวเฉพาะวันธรรมดา
+        if not is_we: pool_state[n_avail] += 1
         
-        # 2. เวรวอร์ด
         v2_pool = [d for d in available_docs if d != v1]
         v2 = random.choice(v2_pool) if v2_pool else v1
         
-        # 3. เวรถปภ. (เฉพาะศุกร์/หยุด)
         v3 = "-"
         if is_we or curr.weekday() == 4:
             v3_pool = [d for d in available_docs if d not in [v1, v2]]
             if v3_pool: v3 = random.choice(v3_pool)
 
-        # บันทึกสถิติ
         stats[v1][f"OPD_{suffix}"] += 1
         work_days[v1].append(curr)
         stats[v2][f"WARD_{suffix}"] += 1
@@ -148,7 +152,6 @@ def generate_schedule():
         })
         curr += timedelta(days=1)
 
-    # คำนวณวันหยุดต่อเนื่อง
     off_stats = {}
     for n in doc_names:
         working = set(work_days[n])
@@ -179,11 +182,10 @@ if st.session_state.doctors:
 
     st.dataframe(df.style.apply(style_table, axis=1).hide(axis='columns', subset=['is_h', 'is_header']), height=600, use_container_width=True)
 
-    # --- ตารางสรุปละเอียด (สีฟ้า) ---
+    # --- ตารางสรุปละเอียด ---
     st.divider()
     st.header("📊 ตารางสรุปภาระงานละเอียด (แยกประเภทเวร)")
     summary_df = pd.DataFrame.from_dict(stats_full, orient='index').reset_index().rename(columns={'index': 'ชื่อแพทย์'})
-    # จัดลำดับคอลัมน์ให้อ่านง่าย
     cols = ['ชื่อแพทย์', 'OPD_WD', 'OPD_WE', 'WARD_WD', 'WARD_WE', 'SEC_WD', 'SEC_WE']
     st.table(summary_df[cols].rename(columns={
         'OPD_WD': 'โอพีดี(ธรรมดา)', 'OPD_WE': 'โอพีดี(หยุด)',
