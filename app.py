@@ -4,166 +4,182 @@ from datetime import datetime, timedelta
 import random
 import io
 
-st.set_page_config(layout="wide", page_title="Medical Scheduler Pro")
+st.set_page_config(layout="wide", page_title="Medical Fin-Scheduler Pro")
 
-# --- CUSTOM CSS FOR IPAD FULLSCREEN & CENTERING ---
+# --- 1. CSS & STYLING ---
 st.markdown("""
     <style>
-    .main .block-container { padding: 1rem 1rem; max-width: 100%; }
-    [data-testid="stElementToolbar"] { display: none; }
-    .stDataFrame div[data-testid="stTable"] div { text-align: center !important; }
-    th { text-align: center !important; color: black !important; font-weight: bold !important; }
+    .main .block-container { padding: 1rem; }
+    th { border: 1px solid #ddd !important; text-align: center !important; background-color: #f0f2f6; color: black !important; font-weight: bold; }
+    td { border: 1px solid #ddd !important; text-align: center !important; }
+    input { text-align: center; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- COLORS SETTINGS ---
-HEADER_COLORS = {"OPD": "#FFD700", "WARD": "#87CEFA", "SEC": "#98FB98", "HOLIDAY_CELL": "#FF9999"}
-
-def get_distinct_color(idx):
-    # ชุดสีพาสเทลที่แยกเฉดชัดเจน (แดง, เขียว, ฟ้า, ส้ม, ม่วง, ชมพู, เหลือง)
-    palette = ["#FFB3BA", "#BAFFC9", "#BAE1FF", "#FFFFBA", "#FFDFBA", "#E0BBE4", "#D4F0F0", "#FEC8D8", "#C5E1A5", "#90CAF9"]
-    return palette[idx % len(palette)]
-
-# --- SESSION STATE ---
+# --- 2. INITIALIZATION ---
 if 'doctors' not in st.session_state:
-    st.session_state.doctors = [
-        {"id": 1, "name": "หมอเอ", "start_date": datetime(2025, 6, 1)},
-        {"id": 2, "name": "หมอบี", "start_date": datetime(2025, 6, 1)},
-        {"id": 3, "name": "หมอซี", "start_date": datetime(2025, 6, 1)},
-        {"id": 4, "name": "หมอดี", "start_date": datetime(2025, 6, 1)},
-    ]
+    st.session_state.doctors = []
+if 'custom_holidays' not in st.session_state:
+    st.session_state.custom_holidays = {}
+if 'case_data' not in st.session_state:
+    st.session_state.case_data = {}
 
-# วันหยุดราชการไทยเบื้องต้น
-if 'holidays' not in st.session_state:
-    st.session_state.holidays = {
-        datetime(2025, 6, 3): "วันเฉลิมฯ พระราชินี", datetime(2025, 7, 10): "วันอาสาฬหบูชา",
-        datetime(2025, 7, 11): "วันเข้าพรรษา", datetime(2025, 7, 28): "วันเฉลิมฯ ร.10",
-        datetime(2025, 8, 12): "วันแม่แห่งชาติ", datetime(2025, 10, 13): "วันสวรรคต ร.9",
-        datetime(2025, 10, 23): "วันปิยมหาราช", datetime(2025, 12, 5): "วันพ่อแห่งชาติ",
-        datetime(2025, 12, 10): "วันรัฐธรรมนูญ", datetime(2025, 12, 31): "วันสิ้นปี",
-        datetime(2026, 1, 1): "วันขึ้นปีใหม่", datetime(2026, 3, 3): "วันมาฆบูชา",
-        datetime(2026, 4, 6): "วันจักรี", datetime(2026, 4, 13): "วันสงกรานต์",
-        datetime(2026, 4, 14): "วันสงกรานต์", datetime(2026, 4, 15): "วันสงกรานต์",
-        datetime(2026, 5, 1): "วันแรงงาน", datetime(2026, 5, 4): "วันฉัตรมงคล",
-        datetime(2026, 5, 31): "วันวิสาขบูชา"
-    }
+def get_thai_year(dt): return dt.year + 543
 
-# --- SIDEBAR ---
+def get_fixed_holidays(year_thai):
+    yc = year_thai - 543
+    return {datetime(yc, 1, 1): "ปีใหม่", datetime(yc, 4, 13): "สงกรานต์", datetime(yc, 4, 14): "สงกรานต์", 
+            datetime(yc, 4, 15): "สงกรานต์", datetime(yc, 5, 1): "แรงงาน", datetime(yc, 12, 5): "วันพ่อ", 
+            datetime(yc, 12, 31): "สิ้นปี"} # ย่อเพื่อประหยัดพื้นที่
+
+# --- 3. SIDEBAR ---
 with st.sidebar:
-    st.header("⚙️ ปี พ.ศ. ที่จัดเวร")
-    selected_year = st.number_input("เริ่มต้น มิ.ย. ปี พ.ศ.", 2567, 2600, 2568)
+    st.title("⚙️ ตั้งค่า & ข้อมูล")
+    selected_year = st.number_input("ปี พ.ศ. เริ่มต้น (มิ.ย.)", 2567, 2600, 2568)
     s_dt = datetime(selected_year - 543, 6, 1)
     e_dt = datetime(selected_year - 542, 5, 31)
 
-    st.divider()
-    st.header("👨‍⚕️ แพทย์ & วันหยุด")
-    with st.expander("➕ เพิ่มแพทย์/วันหยุด"):
-        with st.form("add_form", clear_on_submit=True):
-            type = st.radio("ประเภท", ["แพทย์", "วันหยุด"])
-            name = st.text_input("ชื่อ")
-            date = st.date_input("วันที่")
-            if st.form_submit_button("บันทึก"):
-                if name:
-                    if type == "แพทย์":
-                        st.session_state.doctors.append({"id": random.randint(100,999), "name": name, "start_date": datetime.combine(date, datetime.min.time())})
-                    else:
-                        st.session_state.holidays[datetime.combine(date, datetime.min.time())] = name
-                    st.rerun()
+    if st.button("🗑️ ล้างข้อมูลทั้งหมด"):
+        st.session_state.doctors = []
+        st.session_state.custom_holidays = {}
+        st.session_state.case_data = {}
+        st.rerun()
 
-    st.subheader("📋 ลิสต์วันหยุดปัจจุบัน")
-    for d, n in sorted(st.session_state.holidays.items()):
-        if s_dt <= d <= e_dt:
-            c1, c2 = st.columns([4, 1])
-            c1.caption(f"{d.strftime('%d/%m/%Y')} {n}")
-            if c2.button("🗑️", key=f"h_{d.timestamp()}"):
-                del st.session_state.holidays[d]
+    with st.form("doc_form", clear_on_submit=True):
+        st.subheader("👨‍⚕️ เพิ่มแพทย์")
+        name = st.text_input("ชื่อ (เช่น A, B, C)")
+        start = st.date_input("เริ่มงาน", s_dt)
+        if st.form_submit_button("บันทึก"):
+            if name:
+                # ตัดคำว่า "หมอ" ออกตามโจทย์ข้อ 8
+                clean_name = name.replace("หมอ", "").strip()
+                st.session_state.doctors.append({"id": random.randint(100,999), "name": clean_name, "start": datetime.combine(start, datetime.min.time())})
                 st.rerun()
 
-# --- ALGORITHM & LOGIC ---
-def generate_all():
-    curr = s_dt
-    data = []
-    # เก็บสถิติ: {doc_name: {เวรประเภท: {วันธรรมดา/วันหยุด: count}}}
-    stats = {d['name']: {"เวรนอกเวลา": [0, 0], "เวรวอร์ด": [0, 0], "เวรถปภ.": [0, 0]} for d in st.session_state.doctors}
-    
-    while curr <= e_dt:
-        h_text = st.session_state.holidays.get(curr, "")
-        is_free = (curr.weekday() >= 5) or (h_text != "")
-        type_idx = 1 if is_free else 0 # 0=Weekday, 1=Holiday
-        
-        available = [d for d in st.session_state.doctors if d['start_date'] <= curr]
-        if len(available) < 2: curr += timedelta(days=1); continue
-        
-        random.shuffle(available)
-        # จัดเวร
-        available.sort(key=lambda x: sum(stats[x['name']][k][type_idx] for k in stats[x['name']]))
-        
-        v1 = available[0]['name']
-        stats[v1]["เวรนอกเวลา"][type_idx] += 1
-        
-        v2 = available[1]['name']
-        stats[v2]["เวรวอร์ด"][type_idx] += 1
-        
-        v3 = "-"
-        if curr.weekday() in [4,5,6] or h_text != "":
-            v3 = available[2]['name'] if len(available) > 2 else available[0]['name']
-            stats[v3]["เวรถปภ."][type_idx] += 1
+    # รายชื่อแพทย์และปุ่มลบ
+    for i, d in enumerate(st.session_state.doctors):
+        c1, c2 = st.columns([3, 1])
+        c1.write(f"แพทย์ {d['name']}")
+        if c2.button("❌", key=f"del_{d['id']}"):
+            st.session_state.doctors.pop(i)
+            st.rerun()
 
-        data.append({
-            "วันที่": curr.strftime("%d/%m/%Y"),
+# --- 4. LOGIC: SMART ROTATION & FINANCE ---
+def generate_schedule():
+    holidays = get_fixed_holidays(selected_year)
+    holidays.update(get_fixed_holidays(selected_year + 1))
+    holidays.update(st.session_state.custom_holidays)
+    
+    docs = [d['name'] for d in st.session_state.doctors]
+    if len(docs) < 2: return pd.DataFrame(), {}
+
+    curr = s_dt
+    rows = []
+    month_stats = {} # เก็บข้อมูลเงินรายเดือน
+    
+    # วางแผนเวรโอพีดีวันธรรมดา (Fixed Rotation)
+    wd_pool = []
+    curr_temp = s_dt
+    doc_idx = 0
+    while curr_temp <= e_dt:
+        is_h = (curr_temp.weekday() >= 5) or (curr_temp in holidays)
+        if not is_h:
+            # ถ้าเป็นวันธรรมดา ให้รันตามคิว A, B, C...
+            assigned = docs[doc_idx % len(docs)]
+            wd_pool.append(assigned)
+            doc_idx += 1
+        curr_temp += timedelta(days=1)
+
+    curr = s_dt
+    wd_idx = 0
+    while curr <= e_dt:
+        m_key = f"{curr.month}/{to_thai_year(curr)}"
+        if m_key not in month_stats: month_stats[m_key] = {d: {"case_money": 0, "ward_money": 0} for d in docs}
+
+        h_text = holidays.get(curr, "")
+        is_h = (curr.weekday() >= 5) or (h_text != "")
+        
+        # 1. เวรโอพีดี (นอกเวลา)
+        v1 = "-"
+        if not is_h:
+            v1 = wd_pool[wd_idx]
+            wd_idx += 1
+        else:
+            # วันหยุดใช้ระบบสุ่ม/เวียนจาก Pool วันหยุด
+            v1 = random.choice(docs)
+
+        # 2. เวรวอร์ด
+        v2 = random.choice([d for d in docs if d != v1])
+        
+        # 3. คำนวณค่าเวรวอร์ด (ข้อ 10)
+        v2_pay = 1200 if is_h else 600
+        month_stats[m_key][v2]["ward_money"] += v2_pay
+
+        # 4. ดึงข้อมูลจำนวนเคสจาก Session State (ข้อ 9)
+        date_str = curr.strftime("%Y-%m-%d")
+        c_in = st.session_state.case_data.get(f"{date_str}_in", 0)
+        c_out = st.session_state.case_data.get(f"{date_str}_out", 0)
+        c_ward = st.session_state.case_data.get(f"{date_str}_ward", 0)
+
+        # คิดเงิน (ข้อ 9)
+        # เคสในเวลา 5 บาท (เข้าทุกคนเฉลี่ย หรือเข้าเวรโอพีดี? โจทย์บอกเข้าแพทย์แต่ละคน ในที่นี้ขอเข้าคนตรวจโอพีดีวันนั้น)
+        month_stats[m_key][v1]["case_money"] += (c_in * 5) + (c_out * 50) + (c_ward * 50)
+
+        rows.append({
+            "วันที่": curr.strftime(f"%d/%m/{to_thai_year(curr)}"),
             "วัน": ["จันทร์","อังคาร","พุธ","พฤหัสบดี","ศุกร์","เสาร์","อาทิตย์"][curr.weekday()],
-            "เวรนอกเวลา": v1, "เวรวอร์ด": v2, "เวรถปภ.": v3,
-            "หมายเหตุ": h_text, "is_h": is_free
+            "โอพีดี": v1, "วอร์ด": v2, "หมายเหตุ": h_text,
+            "เคสในเวลา": c_in, "เคสนอกเวลา": c_out, "เคสวอร์ด": c_ward,
+            "ค่าเวรวอร์ด": v2_pay, "is_h": is_h, "raw_date": date_str
         })
         curr += timedelta(days=1)
-    return pd.DataFrame(data), stats
+    
+    return pd.DataFrame(rows), month_stats
 
-# --- DISPLAY ---
-st.title(f"🏥 ตารางเวรแพทย์ปีงบประมาณ {selected_year}")
+# --- 5. DISPLAY ---
+st.title(f"🏥 ระบบจัดเวรและคำนวณค่าตอบแทน {selected_year}")
 
 if len(st.session_state.doctors) >= 2:
-    df, stats = generate_all()
-    # สร้าง Color Map ให้แพทย์
-    doc_colors = {d['name']: get_distinct_color(i) for i, d in enumerate(st.session_state.doctors)}
-
-    def style_main(row):
-        # พื้นฐานตัวหนังสือสีดำ กึ่งกลาง
-        base = 'color: black; font-weight: bold; text-align: center;'
-        styles = [base] * len(row)
-        # สีช่องวันที่/วัน
-        if row.iloc[-1]: # is_h
-            styles[0] = styles[1] = f'background-color: {HEADER_COLORS["HOLIDAY_CELL"]}; {base}'
-        else:
-            styles[0] = styles[1] = f'background-color: white; {base}'
-        
-        # สีแพทย์
-        for i, col_idx in enumerate([2, 3, 4]):
-            name = row.iloc[col_idx]
-            if name in doc_colors:
-                styles[col_idx] = f'background-color: {doc_colors[name]}; {base}'
-        return styles
-
-    # พ่น Header CSS
-    st.markdown(f"<style>th:nth-child(4){{background:{HEADER_COLORS['OPD']}!important}} th:nth-child(5){{background:{HEADER_COLORS['WARD']}!important}} th:nth-child(6){{background:{HEADER_COLORS['SEC']}!important}}</style>", unsafe_allow_html=True)
+    df, stats = generate_schedule()
     
-    st.dataframe(df.style.apply(style_main, axis=1).hide(axis='columns', subset=['is_h']), height=600, use_container_width=True)
+    # ส่วนกรอกข้อมูลจำนวนเคส
+    st.subheader("📝 กรอกจำนวนเคสประจำวัน")
+    col_date, col_in, col_out, col_wd = st.columns(4)
+    with col_date: edit_date = st.date_input("เลือกวันที่เพื่อกรอกเคส", datetime.now())
+    with col_in: in_val = st.number_input("จำนวนเคสในเวลา (5.-)", 0)
+    with col_out: out_val = st.number_input("จำนวนเคสนอกเวลา (50.-)", 0)
+    with col_wd: wd_val = st.number_input("จำนวนคนไข้วอร์ด (50.-)", 0)
+    
+    if st.button("บันทึกสถิติเคส"):
+        d_key = edit_date.strftime("%Y-%m-%d")
+        st.session_state.case_data[f"{d_key}_in"] = in_val
+        st.session_state.case_data[f"{d_key}_out"] = out_val
+        st.session_state.case_data[f"{d_key}_ward"] = wd_val
+        st.success("บันทึกสำเร็จ!")
+        st.rerun()
 
-    # --- SUMMARY TABLE ---
+    # แสดงตารางใหญ่
+    def style_row(row):
+        color = 'background-color: #FF8A80; color: black;' if row['is_h'] else 'background-color: white; color: black;'
+        return [color] * len(row)
+
+    st.subheader("🗓️ ตารางเวรและรายได้")
+    st.dataframe(df.style.apply(style_row, axis=1).hide(axis='columns', subset=['is_h', 'raw_date']), height=500, use_container_width=True)
+
+    # --- 6. SUMMARY REPORT (ข้อ 12) ---
     st.divider()
-    st.subheader("📊 สรุปจำนวนเวรรายบุคคล (ครั้ง)")
-    summary_list = []
-    for d_name, shifts in stats.items():
-        summary_list.append({
-            "ชื่อแพทย์": d_name,
-            "นอกเวลา(ธรรมดา)": shifts["เวรนอกเวลา"][0], "นอกเวลา(หยุด)": shifts["เวรนอกเวลา"][1],
-            "วอร์ด(ธรรมดา)": shifts["เวรวอร์ด"][0], "วอร์ด(หยุด)": shifts["เวรวอร์ด"][1],
-            "ถปภ.(ธรรมดา)": shifts["เวรถปภ."][0], "ถปภ.(หยุด)": shifts["เวรถปภ."][1],
-            "รวมทั้งหมด": sum(shifts[k][0] + shifts[k][1] for k in shifts)
-        })
-    st.table(pd.DataFrame(summary_list))
+    st.subheader("💰 สรุปยอดเงินรายเดือนแยกตามแพทย์")
+    for month, data in stats.items():
+        with st.expander(f"ดูยอดเงินเดือน {month}"):
+            sum_df = pd.DataFrame.from_dict(data, orient='index')
+            sum_df.columns = ["ค่าเคสรวม (In/Out/Ward)", "ค่าเวรวอร์ด"]
+            sum_df["รวมสุทธิ"] = sum_df.sum(axis=1)
+            st.table(sum_df)
 
-    # DOWNLOAD
-    csv = df.drop(columns=['is_h']).to_csv(index=False).encode('utf-8-sig')
-    st.download_button("📥 ดาวน์โหลดตาราง (CSV)", csv, "schedule.csv", "text/csv", use_container_width=True)
+    # Note เพิ่มเติม (ข้อ 11)
+    st.text_area("🗒️ บันทึกเพิ่มเติม (Note)", placeholder="พิมพ์หมายเหตุภาพรวมที่นี่...")
+
 else:
-    st.warning("เพิ่มแพทย์อย่างน้อย 2 คน")
+    st.info("👈 กรุณาเพิ่มชื่อแพทย์ที่แถบด้านข้างอย่างน้อย 2 ท่าน")
+
+def to_thai_year(dt): return dt.year + 543
